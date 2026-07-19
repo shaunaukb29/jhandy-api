@@ -251,6 +251,13 @@ st.markdown("<div class='cd-tagline'>Upload engine audio for an instant acoustic
 # ─────────────────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Loading acoustic model (first run takes a moment)…")
 def load_model():
+    # Force the ~2GB CLAP audio model to load now, at boot / first cache-fill,
+    # instead of lazily inside the first diagnose() call. This makes any
+    # memory-related crash happen visibly at load time (with a clear log),
+    # rather than silently inside a user's click handler (looked like "no
+    # results" with no traceback ever reaching the UI).
+    from cardiag.audio.clap import Clap
+    Clap()
     return Classifier.load()
 
 clf = load_model()
