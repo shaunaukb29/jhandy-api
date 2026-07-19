@@ -1,0 +1,109 @@
+{
+  "kind": {
+    "classes": [
+      "fault",
+      "normal"
+    ],
+    "n": 3636,
+    "degenerate": false,
+    "cv_bal_acc": 0.657,
+    "cv_bal_acc_std": 0.088,
+    "cv_folds": 25,
+    "majority_acc": 0.741,
+    "n_videos": 326,
+    "weak_signal": "balanced accuracy is within ~2\u03c3 of chance (0.5) \u2014 this head carries little signal; needs more/cleaner data",
+    "temperature": 4.144
+  },
+  "knock": {
+    "classes": [
+      "knock",
+      "normal_idle"
+    ],
+    "n": 1539,
+    "degenerate": false,
+    "cv_bal_acc": 0.938,
+    "cv_bal_acc_std": 0.038,
+    "cv_folds": 25,
+    "majority_acc": 0.901,
+    "n_videos": 235,
+    "temperature": 1.86
+  },
+  "cause": {
+    "classes": [
+      "accessories",
+      "belt",
+      "brakes",
+      "cv_axle",
+      "differential",
+      "engine_internal",
+      "exhaust",
+      "fuel_ignition",
+      "power_steering",
+      "suspension",
+      "transmission",
+      "turbo",
+      "vacuum_leak",
+      "water_pump",
+      "wheel_bearing",
+      "wheel_tire"
+    ],
+    "n": 1909,
+    "degenerate": false,
+    "cv_bal_acc": 0.168,
+    "cv_bal_acc_std": 0.02,
+    "cv_folds": 10,
+    "majority_acc": 0.187,
+    "n_videos": 196,
+    "temperature": 1.0
+  },
+  "region": {
+    "classes": [
+      "accessory",
+      "brakes/wheels",
+      "drivetrain",
+      "engine",
+      "exhaust",
+      "suspension/steering"
+    ],
+    "n": 1863,
+    "degenerate": false,
+    "cv_bal_acc": 0.314,
+    "cv_bal_acc_std": 0.044,
+    "cv_folds": 25,
+    "majority_acc": 0.359,
+    "n_videos": 184,
+    "temperature": 1.0
+  },
+  "knock_region": {
+    "classes": [
+      "accessory",
+      "brakes/wheels",
+      "drivetrain",
+      "engine",
+      "exhaust",
+      "suspension/steering"
+    ],
+    "n": 110,
+    "degenerate": false,
+    "cv_bal_acc": 0.172,
+    "cv_bal_acc_std": 0.051,
+    "cv_folds": 10,
+    "majority_acc": 0.655,
+    "n_videos": 39,
+    "temperature": 1.0
+  },
+  "triage": {
+    "classes": [
+      "chassis",
+      "engine"
+    ],
+    "n": 1863,
+    "degenerate": false,
+    "cv_bal_acc": 0.678,
+    "cv_bal_acc_std": 0.047,
+    "cv_folds": 25,
+    "majority_acc": 0.675,
+    "n_videos": 184,
+    "temperature": 3.959
+  }
+}
