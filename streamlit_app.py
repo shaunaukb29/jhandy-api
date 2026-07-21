@@ -249,18 +249,80 @@ st.markdown("<div class='cd-tagline'>Upload engine audio for an instant acoustic
 # ─────────────────────────────────────────────────────────────────────────
 # Model loader
 # ─────────────────────────────────────────────────────────────────────────
-@st.cache_resource(show_spinner="Loading acoustic model (first run takes a moment)…")
+@st.cache_resource(show_spinner="Loading acoustic model (downloading ~2GB weights on first run, this may take a few minutes)...")
 def load_model():
-    # Force the ~2GB CLAP audio model to load now, at boot / first cache-fill,
-    # instead of lazily inside the first diagnose() call. This makes any
-    # memory-related crash happen visibly at load time (with a clear log),
-    # rather than silently inside a user's click handler (looked like "no
-    # results" with no traceback ever reaching the UI).
+    # Force the ~2GB CLAP model to download and load now at boot time
+    # rather than lazily during the first diagnosis click to prevent timeouts.
+    try:
+        from huggingface_hub import snapshot_download
+        snapshot_download("laion/clap-htsat-unfused", local_files_only=False)
+    except Exception:
+        pass
     from cardiag.audio.clap import Clap
     Clap()
+    # Pre-warm Silero VAD so it doesn't try to reach the network during diagnosis
+    try:
+        from silero_vad import load_silero_vad
+        load_silero_vad()
+    except Exception:
+        pass
     return Classifier.load()
 
 clf = load_model()
+
+def sanitize_and_check_audio(uploaded_file) -> str | None:
+    """Security sanitization and validation on uploaded/recorded audio files.
+    
+    1. Checks file size (max 10MB).
+    2. Validates type/extension.
+    3. Loads with soundfile to verify integrity (preventing shell/execution exploits).
+    4. Truncates/limits duration to 15 seconds maximum.
+    """
+    if not uploaded_file:
+        return None
+        
+    # 1. Size check
+    if uploaded_file.size > 10 * 1024 * 1024:
+        st.error("File is too large (maximum 10MB).")
+        return None
+        
+    # 2. Extension check
+    raw_name = getattr(uploaded_file, "name", "recorded_audio.wav") or "recorded_audio.wav"
+    suffix = Path(raw_name).suffix.lower() or ".wav"
+    if suffix not in (".wav", ".mp3", ".ogg", ".m4a", ".flac", ".aac"):
+        st.error("Invalid audio format.")
+        return None
+
+    # Write to a secure temp file (tempfile handles secure unique name generation)
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp.write(uploaded_file.read())
+    tmp.flush()
+    tmp_path = tmp.name
+
+    # 3 & 4. Integrity check & duration limit (using soundfile/librosa)
+    try:
+        import soundfile as sf
+        import librosa
+        
+        info = sf.info(tmp_path)
+        duration = info.duration
+        
+        # Enforce 15 seconds limit
+        if duration > 15.0:
+            st.warning("Recording exceeds 15 seconds limit. Truncating to the first 15 seconds.")
+            y, sr = librosa.load(tmp_path, sr=None)
+            y_trimmed = y[:int(15.0 * sr)]
+            sf.write(tmp_path, y_trimmed, sr)
+            
+    except Exception as e:
+        st.error("Uploaded file is corrupt or not a valid audio recording.")
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        return None
+
+    return tmp_path
 
 # ─────────────────────────────────────────────────────────────────────────
 # Recording tip
@@ -275,7 +337,13 @@ st.markdown("""
 # ─────────────────────────────────────────────────────────────────────────
 # Inputs
 # ─────────────────────────────────────────────────────────────────────────
-audio_file = st.file_uploader("Audio recording", type=["wav", "mp3", "m4a", "flac", "ogg", "aac"])
+input_mode = st.radio("Choose input method:", ["Upload Audio File", "Record Live Audio"], horizontal=True)
+
+audio_file = None
+if input_mode == "Upload Audio File":
+    audio_file = st.file_uploader("Audio recording", type=["wav", "mp3", "m4a", "flac", "ogg", "aac"])
+else:
+    audio_file = st.audio_input("Record live audio (max 15s)")
 
 with st.expander("➕  Add OBD-II codes (optional)"):
     obd_input = st.text_input(
@@ -392,6 +460,28 @@ def render_reasoning(reasoning: dict, obd_codes: list[str]) -> None:
             + "".join(cards) + "</div>",
             unsafe_allow_html=True,
         )
+
+    similar_cases = reasoning.get("similar_cases", [])
+    if similar_cases:
+        sim_cards = []
+        for case in similar_cases:
+            raw_cause = case.get("cause") or case.get("l1") or case.get("kind") or "Reference Case"
+            cause = escape(raw_cause.replace("_", " ").title())
+            similarity = float(case.get("similarity", 0.0))
+            sim_cards.append(
+                f"<div style='margin-bottom:10px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:0px;'>"
+                f"<span style='font-size:14px;color:var(--text);font-weight:600;'>{cause}</span>"
+                f"<span style='font-size:12px;color:var(--accent);font-weight:700;'>{similarity * 100:.0f}% Match</span>"
+                f"</div>"
+                f"</div>"
+            )
+        st.markdown(
+            "<div class='cd-card'><h4>Acoustically Similar Reference Cases</h4>"
+            + "".join(sim_cards) + "</div>",
+            unsafe_allow_html=True,
+        )
+
 
     question = reasoning.get("followup_question")
     question_id = reasoning.get("followup_id")
@@ -560,52 +650,69 @@ def synthesize(result, reasoning=None) -> tuple[str, list[str]]:
 # Diagnose
 # ─────────────────────────────────────────────────────────────────────────
 if audio_file:
-    suffix = Path(audio_file.name).suffix or ".wav"
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(audio_file.read())
-    tmp.flush()
-    tmp_path = tmp.name
+    tmp_path = sanitize_and_check_audio(audio_file)
+    
+    if tmp_path and os.path.exists(tmp_path):
+        st.audio(tmp_path)
 
-    st.audio(tmp_path)
-
-    audio_key = f"{audio_file.name}:{audio_file.size}:{obd_input.strip().upper()}"
-    run_diagnosis = st.button("🔍  Diagnose Audio")
-    saved = st.session_state.get("carithm_diagnosis")
-    if run_diagnosis or (saved and saved.get("audio_key") == audio_key):
-        if run_diagnosis:
-            with st.spinner("Analyzing audio — this takes a few seconds…"):
-                result = clf.diagnose(tmp_path)
-                obd_codes = [c.strip().upper() for c in obd_input.split(",") if c.strip()]
-                try:
-                    from cardiag.inference.reasoning import ReasoningEngine
-
-                    reasoning = ReasoningEngine().reason(result.to_dict(), obd_codes)
-                except Exception as exc:
+        file_name = getattr(audio_file, "name", "recorded_audio.wav") or "recorded_audio.wav"
+        audio_key = f"{file_name}:{audio_file.size}:{obd_input.strip().upper()}"
+        run_diagnosis = st.button("🔍  Diagnose Audio")
+        saved = st.session_state.get("carithm_diagnosis")
+        if run_diagnosis or (saved and saved.get("audio_key") == audio_key):
+            if run_diagnosis:
+                with st.spinner("Analyzing audio — this takes a few seconds…"):
+                    diag_error = None
+                    result = None
                     reasoning = None
-                    st.warning(f"Combined analysis unavailable: {exc}")
-            st.session_state["carithm_diagnosis"] = {
-                "audio_key": audio_key,
-                "result": result,
-                "reasoning": reasoning,
-                "obd_codes": obd_codes,
-                "asked_ids": [],
-            }
-        else:
-            result = saved["result"]
-            reasoning = saved.get("reasoning")
-            obd_codes = saved.get("obd_codes", [])
+                    obd_codes = [c.strip().upper() for c in obd_input.split(",") if c.strip()]
+                    try:
+                        result = clf.diagnose(tmp_path)
+                    except Exception as exc:
+                        diag_error = exc
+                    if result is not None:
+                        try:
+                            from cardiag.inference.reasoning import ReasoningEngine
+                            reasoning = ReasoningEngine().reason(result.to_dict(), obd_codes)
+                        except Exception as exc:
+                            reasoning = None
+                            st.warning(f"Reasoning engine error: {exc}")
+                st.session_state["carithm_diagnosis"] = {
+                    "audio_key": audio_key,
+                    "result": result,
+                    "reasoning": reasoning,
+                    "obd_codes": obd_codes,
+                    "diag_error": str(diag_error) if diag_error else None,
+                    "asked_ids": [],
+                }
+                if diag_error:
+                    st.error(f"Audio analysis failed: {diag_error}")
+            else:
+                result = saved["result"]
+                reasoning = saved.get("reasoning")
+                obd_codes = saved.get("obd_codes", [])
+                diag_error = saved.get("diag_error")
+                if diag_error:
+                    st.error(f"Audio analysis failed: {diag_error}")
 
-        # The reasoning cards are the user-facing result. Raw model telemetry is
-        # deliberately omitted to keep the report focused on actionable checks.
-        if obd_codes or reasoning:
-            try:
-                if reasoning:
+            # Always render whatever we have — never silently show only the caption
+            if reasoning:
+                try:
                     render_reasoning(reasoning, obd_codes)
+                except Exception as exc:
+                    st.warning(f"Result rendering error: {exc}")
+            elif result is not None and not diag_error:
+                # Diagnosis ran but reasoning returned nothing (edge case)
+                st.info("Audio processed — no strong fault candidates identified. "
+                        "Try adding OBD-II codes or a fault description for a more complete analysis.")
 
-            except Exception as exc:
-                st.warning(f"Combined analysis unavailable: {exc}")
+            st.caption("Decision support only — not a replacement for professional inspection.")
 
-        st.caption("Decision support only — not a replacement for professional inspection.")
+            # Clean up the temporary file
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
 elif not audio_file:
     st.markdown("""
