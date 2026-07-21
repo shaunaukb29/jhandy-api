@@ -5,6 +5,16 @@ Acoustic fault triage + OBD-II reasoning
 
 import sys
 import os
+
+# MUST be set before numba/librosa/torch are imported anywhere in the process.
+# numba's default OpenMP threading layer can collide with PyTorch's own bundled
+# OpenMP runtime in the same process, causing native heap corruption
+# ("malloc(): unaligned tcache chunk detected") that aborts the whole worker
+# with no Python-level traceback. "workqueue" avoids OpenMP entirely.
+os.environ.setdefault("NUMBA_THREADING_LAYER", "workqueue")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_THREADING_LAYER", "GNU")
+
 import tempfile
 from html import escape
 from pathlib import Path
@@ -307,13 +317,7 @@ def sanitize_and_check_audio(uploaded_file) -> str | None:
         info = sf.info(tmp_path)
         duration = info.duration
         
-        # Enforce 15 seconds limit
-        if duration > 15.0:
-            st.warning("Recording exceeds 15 seconds limit. Truncating to the first 15 seconds.")
-            y, sr = librosa.load(tmp_path, sr=None)
-            y_trimmed = y[:int(15.0 * sr)]
-            sf.write(tmp_path, y_trimmed, sr)
-            
+        # No duration cap — full recording is used as-is.
     except Exception as e:
         st.error("Uploaded file is corrupt or not a valid audio recording.")
         try:
@@ -668,15 +672,27 @@ if audio_file:
                     obd_codes = [c.strip().upper() for c in obd_input.split(",") if c.strip()]
                     try:
                         result = clf.diagnose(tmp_path)
-                    except Exception as exc:
+                    except BaseException as exc:  # catch EVERYTHING, not just Exception
+                        import traceback
                         diag_error = exc
+                        print("[diagnose] FAILED:", file=sys.stderr, flush=True)
+                        traceback.print_exc(file=sys.stderr)
+                        st.exception(exc)  # full traceback, visible in the UI itself
                     if result is not None:
                         try:
                             from cardiag.inference.reasoning import ReasoningEngine
+                            rd = result.to_dict()
+                            print(f"[debug] obd_codes={obd_codes!r} "
+                                  f"verdict={rd.get('verdict')!r} "
+                                  f"causes={rd.get('causes')!r}",
+                                  file=sys.stderr, flush=True)
                             reasoning = ReasoningEngine().reason(result.to_dict(), obd_codes)
-                        except Exception as exc:
+                        except BaseException as exc:
+                            import traceback
                             reasoning = None
-                            st.warning(f"Reasoning engine error: {exc}")
+                            print("[reasoning] FAILED:", file=sys.stderr, flush=True)
+                            traceback.print_exc(file=sys.stderr)
+                            st.exception(exc)
                 st.session_state["carithm_diagnosis"] = {
                     "audio_key": audio_key,
                     "result": result,
@@ -696,15 +712,28 @@ if audio_file:
                     st.error(f"Audio analysis failed: {diag_error}")
 
             # Always render whatever we have — never silently show only the caption
-            if reasoning:
+            reasoning_has_content = bool(reasoning) and any(
+                reasoning.get(k) for k in
+                ("obd_interpretations", "assessment", "components", "similar_cases")
+            )
+            if reasoning_has_content:
                 try:
                     render_reasoning(reasoning, obd_codes)
                 except Exception as exc:
                     st.warning(f"Result rendering error: {exc}")
             elif result is not None and not diag_error:
-                # Diagnosis ran but reasoning returned nothing (edge case)
-                st.info("Audio processed — no strong fault candidates identified. "
-                        "Try adding OBD-II codes or a fault description for a more complete analysis.")
+                # Diagnosis ran but reasoning returned nothing usable — show the
+                # raw verdict/notes instead of nothing at all.
+                st.info("No strong fault candidates identified from structured reasoning. "
+                        "Showing the raw model output below.")
+                rd = result.to_dict() if hasattr(result, "to_dict") else {}
+                st.write(f"**Verdict:** {rd.get('verdict', 'unknown')}")
+                st.write(f"**Fault probability:** {pct(float(rd.get('fault_probability', 0.0)))}")
+                if rd.get("note"):
+                    st.caption(rd["note"])
+                if not reasoning_has_content and reasoning is not None:
+                    print(f"[reasoning] empty content, raw dict: {reasoning}",
+                          file=sys.stderr, flush=True)
 
             st.caption("Decision support only — not a replacement for professional inspection.")
 

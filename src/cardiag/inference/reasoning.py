@@ -157,7 +157,7 @@ class ReasoningEngine:
         """
         description = (description or "").strip()
 
-        if not active_codes and not description and not diag_dict.get("causes"):
+        if not active_codes and not description and not diag_dict.get("verdict"):
             return {"parsed_codes": [], "coherence_matches": [],
                     "explanation": "", "components": [], "assessment": ""}
 

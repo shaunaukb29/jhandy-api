@@ -117,8 +117,14 @@ def _window_vectors(path, win_s: float = 10.0, sr: int = config.SR_CLAP) -> np.n
             warnings.simplefilter("ignore")
             dur = librosa.get_duration(path=str(path))
     except Exception as e:
+        import sys, traceback
+        print(f"[audio-debug] get_duration FAILED for {path}: "
+              f"{type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
         raise ValueError(f"could not read audio from {path} — is it a valid "
                          f"audio file? ({type(e).__name__})") from None
+    import sys
+    print(f"[audio-debug] get_duration OK for {path}: dur={dur:.2f}s", file=sys.stderr, flush=True)
     offs = [0.0] if dur <= win_s else [0.0, (dur - win_s) / 2, dur - win_s][:3]
     vecs = []
     for off in offs:
@@ -126,7 +132,12 @@ def _window_vectors(path, win_s: float = 10.0, sr: int = config.SR_CLAP) -> np.n
                             duration=win_s)
         # skip too-short OR near-silent windows: embedding silence with CLAP lands
         # near the fault cluster and would produce a confident (wrong) verdict
-        if len(y) < sr // 2 or float(np.max(np.abs(y))) < 1e-3:
+        peak = float(np.max(np.abs(y))) if len(y) else 0.0
+        import sys
+        print(f"[audio-debug] window off={off:.2f}s samples={len(y)} sr={sr} "
+              f"peak_amplitude={peak:.6f} dtype={y.dtype if len(y) else None}",
+              file=sys.stderr, flush=True)
+        if len(y) < sr // 2 or peak < 1e-3:
             continue
         vecs.append(embed_clip(y, sr=sr))
     if not vecs:

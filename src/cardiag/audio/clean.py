@@ -100,9 +100,16 @@ def clean(path, *, music_gate: bool = True, sr: int = config.SR_CLAP,
             y16, sr16 = librosa.load(str(path), sr=config.SR_CHEAP, mono=True)
             yhi, _ = librosa.load(str(path), sr=sr, mono=True)
     except Exception as exc:
+        import sys, traceback
+        print(f"[audio-debug] clean() load FAILED for {path}: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
         raise ValueError(
             f"could not read audio from {path} — is it a valid audio file? "
             f"({type(exc).__name__})") from None
+    import sys
+    print(f"[audio-debug] clean() loaded OK: y16.size={y16.size} yhi.size={yhi.size}",
+          file=sys.stderr, flush=True)
     # defensively sanitize NaN/inf (a corrupt clip should not poison the cascade)
     y16 = np.nan_to_num(y16, copy=False)
     yhi = np.nan_to_num(yhi, copy=False)

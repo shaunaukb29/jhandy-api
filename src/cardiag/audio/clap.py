@@ -48,7 +48,7 @@ class Clap:
         """Zero-shot softmax of each clip over ``prompts`` -> (n_clips, n_prompts)."""
         out = []
         for i in range(0, len(clips), batch):
-            inp = self.p(text=prompts, audios=clips[i:i + batch], sampling_rate=sr,
+            inp = self.p(text=prompts, audio=clips[i:i + batch], sampling_rate=sr,
                          return_tensors="pt", padding=True).to(self.dev)
             with torch.no_grad():
                 out.append(self.m(**inp).logits_per_audio.softmax(-1).cpu().numpy())
@@ -58,7 +58,7 @@ class Clap:
         """L2-normalized 512-d embedding per clip -> (n_clips, 512)."""
         embs = []
         for y in clips:
-            inp = self.p(audios=y, sampling_rate=sr, return_tensors="pt").to(self.dev)
+            inp = self.p(audio=y, sampling_rate=sr, return_tensors="pt").to(self.dev)
             with torch.no_grad():
                 out = self.m.get_audio_features(**inp)
             e = out if torch.is_tensor(out) else getattr(out, "audio_embeds",
